@@ -290,20 +290,53 @@ def _build_clip_cmd(job: Job, req: ClipRequestBody) -> tuple[list[str], str | No
                f"cd ~/.op-replay-clipper-native && {wsl_cmd_str}"]
         return cmd, None  # cwd=None for WSL, it handles its own directory
 
-    # Native execution — use python -u for unbuffered output on Windows
-    uv_bin = _resolve_uv()
-    cmd: list[str] = [
-        uv_bin, "run", "python", "-u", "clip.py",
-        req.render_type,
-        req.route,
-        "-o", output_path,
-        "-m", str(req.file_size_mb),
-        "--file-format", req.file_format,
-        "--openpilot-dir", str(OPENPILOT_DIR),
-        "--skip-openpilot-update",
-        "--skip-openpilot-bootstrap",
-        "--data-root", str(DATA_DIR),
-    ]
+    # Native execution
+    # On Windows, invoke .venv python directly to avoid uv buffering stdout.
+    # uv run wraps the child process and buffers its output, which breaks
+    # real-time log streaming. Using .venv\Scripts\python.exe directly
+    # with -u (unbuffered) gives us line-by-line output.
+    if IS_WINDOWS:
+        venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+        if venv_python.exists():
+            cmd: list[str] = [
+                str(venv_python), "-u", str(PROJECT_ROOT / "clip.py"),
+                req.render_type,
+                req.route,
+                "-o", output_path,
+                "-m", str(req.file_size_mb),
+                "--file-format", req.file_format,
+                "--openpilot-dir", str(OPENPILOT_DIR),
+                "--skip-openpilot-update",
+                "--skip-openpilot-bootstrap",
+                "--data-root", str(DATA_DIR),
+            ]
+        else:
+            uv_bin = _resolve_uv()
+            cmd = [
+                uv_bin, "run", "python", "-u", "clip.py",
+                req.render_type,
+                req.route,
+                "-o", output_path,
+                "-m", str(req.file_size_mb),
+                "--file-format", req.file_format,
+                "--openpilot-dir", str(OPENPILOT_DIR),
+                "--skip-openpilot-update",
+                "--skip-openpilot-bootstrap",
+                "--data-root", str(DATA_DIR),
+            ]
+    else:
+        cmd: list[str] = [
+            "uv", "run", "python", "-u", "clip.py",
+            req.render_type,
+            req.route,
+            "-o", output_path,
+            "-m", str(req.file_size_mb),
+            "--file-format", req.file_format,
+            "--openpilot-dir", str(OPENPILOT_DIR),
+            "--skip-openpilot-update",
+            "--skip-openpilot-bootstrap",
+            "--data-root", str(DATA_DIR),
+        ]
 
     # GPU acceleration
     if IS_MACOS:
