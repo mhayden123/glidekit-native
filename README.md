@@ -1,55 +1,48 @@
 # OP Replay Clipper
 
-Render openpilot driving replay clips locally with GPU acceleration. Supports all openpilot render types including full UI overlay, driver debug, 360 video, and raw camera transcodes. Runs natively on Linux, Windows, and macOS with no Docker dependency.
+Turn any [openpilot](https://github.com/commaai/openpilot) driving route into a shareable video clip. Paste a Comma Connect URL, pick a style, get an MP4.
 
-## Render Types
+Runs locally on your machine with GPU acceleration. No cloud, no Docker, no upload wait.
 
-| Type | Description | Requires openpilot |
-|------|-------------|-------------------|
-| `ui` | openpilot UI overlay with path, lanes, and metadata | Yes |
-| `ui-alt` | Alternative UI layout with steering wheel and confidence rail | Yes |
-| `driver-debug` | Driver camera with DM state, awareness, and pose telemetry | Yes |
-| `forward` | Forward camera transcode (fast, no overlay) | No |
-| `wide` | Wide camera transcode | No |
-| `driver` | Driver camera transcode | No |
-| `360` | Spherical 360 video from wide + driver cameras | No |
-| `forward_upon_wide` | Forward projected onto wide using camera calibration | Yes |
-| `360_forward_upon_wide` | 8K 360 with forward projected onto wide | Yes |
+```bash
+# Try it right now with a public demo route
+git clone https://github.com/mhayden123/op-replay-clipper-native.git
+cd op-replay-clipper-native
+./install.sh    # one-time setup (~15 min)
+./start.sh      # opens http://localhost:7860
+```
 
-## Installation
+## What You Get
+
+**UI Overlay** — the full openpilot display with path prediction, lane lines, speed, and engagement state rendered over the road camera.
+
+**Driver Debug** — driver monitoring camera with attention tracking, eye position, and head pose visualized in real time.
+
+**Raw Camera** — forward, wide, or driver camera video transcoded to a clean MP4. No overlay, just the footage. Fastest render.
+
+**360 Video** — spherical video from wide + driver cameras. Viewable in VLC, YouTube, or any 360 player.
+
+All render types support file size targeting, HEVC output, and SSH download directly from your comma device.
+
+## Install
 
 ### Linux
 
 ```bash
-git clone https://github.com/mhayden123/op-replay-clipper-native.git
-cd op-replay-clipper-native
 ./install.sh
 ```
 
-The installer takes 10-20 minutes on first run. It installs system packages, clones openpilot, builds native dependencies, and generates font atlases. Re-running is safe and skips completed steps.
-
-### macOS (beta)
-
-```bash
-git clone https://github.com/mhayden123/op-replay-clipper-native.git
-cd op-replay-clipper-native
-./install.sh
-```
-
-Requires Homebrew. Uses VideoToolbox for hardware acceleration. Headless rendering support is experimental.
+Installs everything: system packages, openpilot, GPU dependencies. Idempotent — safe to re-run. NVIDIA GPU recommended for NVENC encoding (CPU fallback works, just slower).
 
 ### Windows
 
-Download the desktop app from [releases](https://github.com/mhayden123/op-replay-clipper-desktop/releases) -- it handles everything automatically (installs Python, Git, FFmpeg, and the clipper project).
+Download the desktop app from [Releases](https://github.com/mhayden123/op-replay-clipper-desktop/releases). It installs Python, Git, FFmpeg, and the clipper automatically. Double-click and go.
 
-Or manually:
-```bash
-git clone https://github.com/mhayden123/op-replay-clipper-native.git
-cd op-replay-clipper-native
-python install_windows.py
-```
+For camera-only renders (forward, wide, driver, 360) everything works natively. For UI renders, the app walks you through a one-time WSL setup.
 
-Non-UI render types (forward, wide, driver, 360) work natively. UI render types require WSL -- the desktop app guides you through setup.
+### macOS (beta)
+
+Same as Linux. Requires Homebrew. VideoToolbox hardware acceleration. Headless UI rendering is experimental.
 
 ## Usage
 
@@ -59,85 +52,56 @@ Non-UI render types (forward, wide, driver, 360) work natively. UI render types 
 ./start.sh
 ```
 
-Opens `http://localhost:7860` in your browser. Paste a Comma Connect URL, pick a render type, and click Clip.
+Paste a Comma Connect URL, pick a render type, hit Clip. Output opens in your video player when done.
 
 ### CLI
 
 ```bash
-# Forward camera transcode (no openpilot needed, fast)
-uv run python clip.py forward --demo
-
-# Full UI render with openpilot overlay
-uv run python clip.py ui --demo
-
-# Render a specific route from Comma Connect
-uv run python clip.py ui "https://connect.comma.ai/<dongle>/<start>/<end>"
-
-# SSH download from a comma device on LAN
-uv run python clip.py forward "<route>" --download-source ssh --device-ip 192.168.1.x
-
-# Max quality (no file size limit)
-uv run python clip.py ui "<route>" -m 0
-
-# HEVC output
-uv run python clip.py forward "<route>" --file-format hevc
+uv run python clip.py forward --demo                    # quick test
+uv run python clip.py ui "https://connect.comma.ai/..."  # full UI render
+uv run python clip.py forward "<route>" \
+  --download-source ssh --device-ip 192.168.1.x          # grab from device on LAN
+uv run python clip.py ui "<route>" -m 0 --file-format hevc  # max quality HEVC
 ```
 
 ### Desktop App
 
-For a native GUI, download [OP Replay Clipper Desktop](https://github.com/mhayden123/op-replay-clipper-desktop/releases). It manages the server automatically -- no terminal needed.
+[OP Replay Clipper Desktop](https://github.com/mhayden123/op-replay-clipper-desktop/releases) wraps the web UI in a native window. Manages the server for you — no terminal.
+
+## Render Types
+
+| Type | What it renders | Needs openpilot |
+|------|----------------|-----------------|
+| `ui` | Full openpilot UI overlay | Yes |
+| `ui-alt` | UI variant with steering wheel and confidence rail | Yes |
+| `driver-debug` | Driver camera with DM state and pose telemetry | Yes |
+| `forward` | Forward road camera | No |
+| `wide` | Wide angle camera | No |
+| `driver` | Driver-facing camera | No |
+| `360` | Spherical 360 from wide + driver | No |
+| `forward_upon_wide` | Forward projected onto wide via calibration | Yes |
+| `360_forward_upon_wide` | 8K 360 with forward overlay | Yes |
 
 ## Platform Support
 
-| Feature | Linux | Windows | macOS |
-|---------|-------|---------|-------|
-| Non-UI renders | Native | Native | Native |
-| UI renders | Native | Via WSL | Native (beta) |
-| GPU acceleration | NVIDIA (NVENC) | NVIDIA (NVENC) | VideoToolbox |
+| | Linux | Windows | macOS |
+|--|-------|---------|-------|
+| Camera renders | Native | Native | Native |
+| UI renders | Native | Via WSL | Beta |
+| GPU encoding | NVIDIA NVENC | NVIDIA NVENC | VideoToolbox |
 | CPU fallback | Yes | Yes | Yes |
-| Desktop app | Yes | Yes (auto-setup) | Yes |
 
 ## Requirements
 
-- **Linux**: Ubuntu 22.04+, Mint 21+, or Pop!_OS 22.04+. NVIDIA GPU + drivers recommended (CPU works but slower).
-- **Windows**: Windows 10/11. Python 3.12+ for non-UI renders. WSL + Ubuntu for UI renders.
-- **macOS**: Apple Silicon or Intel. Homebrew. Xcode command line tools.
-- **Disk space**: 15 GB for openpilot build + dependencies.
-
-## Management
-
-```bash
-./install.sh              # Re-run (skips completed steps)
-./install.sh --help       # Show all options
-./install.sh --uninstall  # Remove ~/.op-replay-clipper/
-```
-
-## Architecture
-
-```
-Browser / Desktop App
-    |
-    v
-FastAPI Server (port 7860)
-    |
-    v
-clip.py -> core/ -> renderers/
-    |
-    v
-openpilot (native build)
-NVIDIA GPU (NVENC) or CPU (libx264)
-    |
-    v
-output.mp4
-```
+- **Linux**: Ubuntu 22.04+, Mint, or Pop!_OS. NVIDIA GPU + drivers recommended.
+- **Windows**: 10/11. Desktop app handles all dependencies.
+- **macOS**: Homebrew + Xcode CLI tools.
+- **Disk**: ~15 GB for openpilot + build artifacts.
 
 ## Credits
 
-- [nelsonjchen](https://github.com/nelsonjchen) -- original op-replay-clipper
-- [commaai](https://github.com/commaai) -- openpilot, replay tools, and patched raylib
-- [deanlee](https://github.com/deanlee) -- openpilot replay binary
-- [ntegan1](https://github.com/ntegan1) -- EGL pbuffer headless rendering patches
+Built on [nelsonjchen's](https://github.com/nelsonjchen) op-replay-clipper. Uses [openpilot](https://github.com/commaai/openpilot) by comma.ai, replay tooling by [deanlee](https://github.com/deanlee), and headless rendering patches by [ntegan1](https://github.com/ntegan1).
 
 ## License
 
-See [LICENSE.md](https://github.com/mhayden123/op-replay-clipper/blob/main/LICENSE.md).
+[LICENSE.md](https://github.com/mhayden123/op-replay-clipper/blob/main/LICENSE.md)
