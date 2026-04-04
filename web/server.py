@@ -685,6 +685,196 @@ async def platform_info() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# WSL management endpoints (Windows only)
+# ---------------------------------------------------------------------------
+
+def _wsl_run(args: list[str], timeout: int = 5) -> tuple[int, str, str]:
+    """Run a wsl.exe command with timeout. Returns (exit_code, stdout, stderr)."""
+    try:
+        r = _subprocess.run(
+            ["wsl.exe"] + args,
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return r.returncode, r.stdout, r.stderr
+    except _subprocess.TimeoutExpired:
+        return -1, "", "timeout"
+    except FileNotFoundError:
+        return -1, "", "wsl.exe not found"
+
+
+def _wsl_status_sync() -> dict[str, Any]:
+    """Check WSL status. All checks have 5-second timeouts."""
+    result: dict[str, Any] = {
+        "wsl_installed": False,
+        "distro_name": None,
+        "distro_running": False,
+        "clipper_installed": False,
+        "openpilot_installed": False,
+    }
+
+    if not IS_WINDOWS:
+        return result
+
+    # Check if wsl.exe exists
+    if not shutil.which("wsl.exe") and not shutil.which("wsl"):
+        return result
+
+    # Check WSL status
+    code, stdout, _ = _wsl_run(["--status"], timeout=5)
+    if code != 0:
+        # --status may fail but WSL can still work; try --list
+        code, stdout, _ = _wsl_run(["--list", "--verbose"], timeout=5)
+    if code == 0:
+        result["wsl_installed"] = True
+    else:
+        return result
+
+    # Check for Ubuntu distro
+    code, stdout, _ = _wsl_run(["--list", "--verbose"], timeout=5)
+    if code == 0:
+        for line in stdout.split("\n"):
+            line = line.strip().replace("\x00", "")
+            if "Ubuntu" in line:
+                parts = line.split()
+                name = parts[0].replace("*", "").strip()
+                if not name:
+                    name = parts[1] if len(parts) > 1 else "Ubuntu"
+                result["distro_name"] = name
+                result["distro_running"] = "Running" in line
+                break
+
+    if not result["distro_name"]:
+        return result
+
+    distro = result["distro_name"]
+
+    # Check if clipper is installed inside WSL
+    code, _, _ = _wsl_run(
+        ["-d", distro, "--", "test", "-f",
+         os.path.expanduser("~/.op-replay-clipper-native/clip.py").replace("\\", "/")],
+        timeout=5,
+    )
+    # The path inside WSL is the WSL user's home, not the Windows home
+    if code != 0:
+        code, _, _ = _wsl_run(
+            ["-d", distro, "--", "bash", "-c", "test -f ~/op-replay-clipper-native/clip.py"],
+            timeout=5,
+        )
+    if code == 0:
+        result["clipper_installed"] = True
+
+    # Check if openpilot is installed inside WSL
+    if result["clipper_installed"]:
+        code, _, _ = _wsl_run(
+            ["-d", distro, "--", "bash", "-c",
+             "test -f ~/.op-replay-clipper/openpilot/.venv/bin/python"],
+            timeout=5,
+        )
+        if code == 0:
+            result["openpilot_installed"] = True
+
+    return result
+
+
+@app.get("/api/wsl/status")
+async def wsl_status() -> dict[str, Any]:
+    """Check WSL installation and clipper setup status."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _wsl_status_sync)
+
+
+@app.post("/api/wsl/install")
+async def wsl_install() -> dict[str, Any]:
+    """Install WSL with Ubuntu. Triggers a UAC prompt for admin privileges."""
+    if not IS_WINDOWS:
+        raise HTTPException(status_code=400, detail="WSL install is Windows-only")
+
+    # Check if already installed
+    status = await asyncio.get_event_loop().run_in_executor(None, _wsl_status_sync)
+    if status["wsl_installed"] and status["distro_name"]:
+        return {"status": "already_installed", "distro": status["distro_name"],
+                "message": "WSL is already installed."}
+
+    # Launch WSL install with admin privileges via Start-Process -Verb RunAs
+    # This triggers a UAC prompt — we can't avoid it for WSL install.
+    try:
+        _subprocess.Popen([
+            "powershell.exe", "-NoProfile", "-Command",
+            "Start-Process", "wsl.exe",
+            "-ArgumentList", "'--install','-d','Ubuntu-24.04'",
+            "-Verb", "RunAs",
+        ])
+        return {
+            "status": "installing",
+            "needs_reboot": True,
+            "message": "WSL is being installed. A restart is required to complete setup.",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start WSL install: {e}")
+
+
+@app.post("/api/wsl/setup-clipper")
+async def wsl_setup_clipper() -> StreamingResponse:
+    """Install the clipper inside WSL. Streams progress via SSE."""
+    if not IS_WINDOWS:
+        raise HTTPException(status_code=400, detail="WSL setup is Windows-only")
+
+    status = await asyncio.get_event_loop().run_in_executor(None, _wsl_status_sync)
+    if not status["wsl_installed"] or not status["distro_name"]:
+        raise HTTPException(status_code=400, detail="WSL is not installed. Call /api/wsl/install first.")
+
+    distro = status["distro_name"]
+
+    async def setup_stream():
+        yield f"data: Starting clipper setup inside WSL ({distro})...\n\n"
+
+        setup_script = (
+            "set -e; "
+            "echo '==> Installing system packages'; "
+            "sudo apt-get update -y && sudo apt-get install -y git curl build-essential; "
+            "echo '==> Cloning clipper'; "
+            "if [ -d ~/op-replay-clipper-native ]; then "
+            "  cd ~/op-replay-clipper-native && git pull; "
+            "else "
+            "  git clone https://github.com/mhayden123/op-replay-clipper-native.git ~/op-replay-clipper-native; "
+            "fi; "
+            "echo '==> Running install.sh'; "
+            "cd ~/op-replay-clipper-native && ./install.sh; "
+            "echo '==> Setup complete'"
+        )
+
+        proc = await asyncio.create_subprocess_exec(
+            "wsl.exe", "-d", distro, "--", "bash", "-lc", setup_script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+        assert proc.stdout is not None
+        while True:
+            raw = await proc.stdout.readline()
+            if not raw:
+                break
+            line = raw.decode("utf-8", errors="replace").strip()
+            if line:
+                # Emit step headers as named events for the UI
+                if line.startswith("==>"):
+                    yield f"event: step\ndata: {line[3:].strip()}\n\n"
+                else:
+                    yield f"data: {line}\n\n"
+
+        exit_code = await proc.wait()
+        if exit_code == 0:
+            # Invalidate WSL cache so /api/platform picks up the change
+            global _wsl_cached
+            _wsl_cached = None
+            yield f"event: done\ndata: success\n\n"
+        else:
+            yield f"event: done\ndata: failed (exit code {exit_code})\n\n"
+
+    return StreamingResponse(setup_stream(), media_type="text/event-stream")
+
+
 @app.post("/api/scan-devices")
 async def scan_devices() -> dict[str, Any]:
     """Scan the local network for comma devices with SSH enabled."""
