@@ -350,24 +350,37 @@ clone_openpilot() {
     log_warn "openpilot directory already exists at ${OPENPILOT_ROOT}"
     echo "  To re-clone, remove it first: rm -rf ${OPENPILOT_ROOT}"
     echo "  Continuing with existing checkout..."
-    return
+  else
+    # Shallow partial clone — minimizes bandwidth and disk.
+    # Uses --filter=blob:none (treeless clone): git objects fetched on-demand.
+    # GOTCHA #8: Network must be available during subsequent build steps
+    # because the partial clone may need to fetch additional blobs.
+    git clone \
+      --branch "${OPENPILOT_BRANCH}" \
+      --depth "${OPENPILOT_CLONE_DEPTH}" \
+      --filter=blob:none \
+      --recurse-submodules \
+      --shallow-submodules \
+      --single-branch \
+      "${OPENPILOT_REPO_URL}" \
+      "${OPENPILOT_ROOT}"
+
+    log_ok "openpilot cloned (branch: ${OPENPILOT_BRANCH})"
   fi
 
-  # Shallow partial clone — minimizes bandwidth and disk.
-  # Uses --filter=blob:none (treeless clone): git objects fetched on-demand.
-  # GOTCHA #8: Network must be available during subsequent build steps
-  # because the partial clone may need to fetch additional blobs.
-  git clone \
-    --branch "${OPENPILOT_BRANCH}" \
-    --depth "${OPENPILOT_CLONE_DEPTH}" \
-    --filter=blob:none \
-    --recurse-submodules \
-    --shallow-submodules \
-    --single-branch \
-    "${OPENPILOT_REPO_URL}" \
-    "${OPENPILOT_ROOT}"
-
-  log_ok "openpilot cloned (branch: ${OPENPILOT_BRANCH})"
+  # Ensure LFS binaries (e.g. third_party/acados/x86_64/t_renderer) are
+  # resolved to actual files, not pointer stubs. Required even when cloning
+  # fresh because install_system_packages may have been skipped (SKIP_APT=1),
+  # so the user-global `git lfs install` smudge filter may not be active.
+  # scons reads t_renderer as an executable — a pointer file causes cryptic
+  # "version: not found" / "oid: not found" errors during the build.
+  if command -v git-lfs >/dev/null 2>&1; then
+    (cd "${OPENPILOT_ROOT}" && git lfs install --local && git lfs pull) || \
+      log_warn "git lfs pull failed — LFS binaries may be unresolved"
+    log_ok "openpilot LFS binaries resolved"
+  else
+    log_warn "git-lfs not on PATH — LFS binaries may be unresolved (build may fail)"
+  fi
 }
 
 # ---------------------------------------------------------------------------
