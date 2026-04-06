@@ -261,8 +261,14 @@ preflight_checks() {
   log_ok "git: $(git --version)"
 
   # Disk space — openpilot clone + build needs ~10-15 GB
+  # `df --output=avail` is GNU coreutils only (Linux). macOS `df` uses
+  # positional columns: $4 is the available 512-byte blocks.
   local available_gb
-  available_gb=$(df --output=avail "${GLIDEKIT_HOME%/*}" 2>/dev/null | tail -1 | awk '{printf "%.0f", $1/1048576}')
+  if [[ "${IS_MACOS}" == "true" ]]; then
+    available_gb=$(df "${GLIDEKIT_HOME%/*}" 2>/dev/null | tail -1 | awk '{printf "%.0f", $4/2097152}')
+  else
+    available_gb=$(df --output=avail "${GLIDEKIT_HOME%/*}" 2>/dev/null | tail -1 | awk '{printf "%.0f", $1/1048576}')
+  fi
   if [[ -n "${available_gb}" ]] && (( available_gb < 15 )); then
     log_warn "Only ${available_gb} GB free at ${GLIDEKIT_HOME%/*}. Recommend at least 15 GB."
   else
@@ -955,29 +961,28 @@ validate_install() {
     ((errors+=1))
   fi
 
-  # Check scons build artifacts (Linux only — macOS may use different paths)
-  if [[ "${IS_LINUX}" == "true" ]]; then
-    local scons_targets=(
-      "msgq_repo/msgq/ipc_pyx.so"
-      "msgq_repo/msgq/visionipc/visionipc_pyx.so"
-      "common/params_pyx.so"
-    )
-    for target in "${scons_targets[@]}"; do
-      if [[ -f "${OPENPILOT_ROOT}/${target}" ]]; then
-        log_ok "scons target: ${target}"
-      else
-        log_err "scons target missing: ${target}"
-        ((errors+=1))
-      fi
-    done
-
-    # Check patched pyray (Linux only)
-    if "${OPENPILOT_ROOT}/.venv/bin/python" -c "import raylib; print(raylib.__file__)" 2>/dev/null; then
-      log_ok "patched pyray importable in openpilot venv"
+  # Check scons build artifacts — Python .so extensions have the same paths
+  # on both Linux and macOS (scons produces .so, not .dylib, for Python modules).
+  local scons_targets=(
+    "msgq_repo/msgq/ipc_pyx.so"
+    "msgq_repo/msgq/visionipc/visionipc_pyx.so"
+    "common/params_pyx.so"
+  )
+  for target in "${scons_targets[@]}"; do
+    if [[ -f "${OPENPILOT_ROOT}/${target}" ]]; then
+      log_ok "scons target: ${target}"
     else
-      log_err "patched pyray not importable"
+      log_err "scons target missing: ${target}"
       ((errors+=1))
     fi
+  done
+
+  # Check pyray — patched on Linux (EGL pbuffer), stock on macOS (CGL)
+  if "${OPENPILOT_ROOT}/.venv/bin/python" -c "import raylib; print(raylib.__file__)" 2>/dev/null; then
+    log_ok "pyray importable in openpilot venv"
+  else
+    log_err "pyray not importable"
+    ((errors+=1))
   fi
 
   # Check font atlases (look for generated .png files)
